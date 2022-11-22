@@ -1,15 +1,16 @@
-from typing import NoReturn
-
+import asyncio
 import os
 import os.path
-import asyncio
-import secrets
-from aiohttp import web
-import ssl
 import pathlib
+import secrets
+import socket
+import ssl
+from typing import NoReturn
+from aiohttp import web
 
 import rclpy
 import rclpy.logging
+
 from ros2web.verb import VerbExtension
 
 from ..api.handler import HandlerNode
@@ -23,7 +24,7 @@ async def token_auth(request: web.Request, handler):
 
     search_params = request.rel_url.query
     token_param = search_params.get("token")
-    
+
     if token_param:
         if _token != token_param:
             raise web.HTTPUnauthorized()
@@ -37,7 +38,7 @@ async def token_auth(request: web.Request, handler):
         token = token_header
     else:
         token = request.cookies.get("AUTH")
-        
+
     if _token != token:
         raise web.HTTPUnauthorized()
 
@@ -55,7 +56,7 @@ class ServerVerb(VerbExtension):
             '--port',
             default='8080',
             help='Specify alternate port [default: 8080]')
-        
+
         parser.add_argument(
             '--destination-directory',
             default=os.path.join(os.path.expanduser('~'), '.ros2web'),
@@ -76,7 +77,7 @@ class ServerVerb(VerbExtension):
             default='ERROR',
             choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
             help='Log Level [default: ERROR]')
-        
+
         parser.add_argument(
             '--non-auth',
             action='store_true',
@@ -90,45 +91,58 @@ class ServerVerb(VerbExtension):
         self.__node_name = args.node_name
         self.__namespace = args.namespace
         self.__non_auth = args.non_auth
-        
+
         self.__logger = rclpy.logging.get_logger('ServerVerb')
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        self.__ros_executor = ROSExecutor(node_name=self.__node_name,
-                                          namespace=self.__namespace,
-                                          args=['--ros-args', '--log-level',
-                                                self.__log_level],
-                                          loop=loop)
-
         self.__token = None if self.__non_auth is True else secrets.token_hex(16)
         ip_address = self.__host
         if self.__host is None:
             ip_address = get_ip_address()
-        
-        self.handler_node = HandlerNode(directory=self.__directory,
-                                        ip_address=ip_address, port=self.__port, token=self.__token,
-                                        loop=loop)
 
-        app = self.init_web_app(token=self.__token)
+        if self.available_port(ip_address, self.__port):
+            self.__ros_executor = ROSExecutor(node_name=self.__node_name,
+                                            namespace=self.__namespace,
+                                            args=['--ros-args', '--log-level',
+                                                    self.__log_level],
+                                            loop=loop)
+            
+            self.handler_node = HandlerNode(directory=self.__directory,
+                                            ip_address=ip_address, port=self.__port, token=self.__token,
+                                            loop=loop)
 
-        here = pathlib.Path(self.__directory)
-        ssl_cert = here / "ssl" / "server.crt"
-        ssl_key = here / "ssl" / "server.key"
-        ssl_context = None
-        if ssl_cert.exists() and ssl_key.exists():
-            ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            ssl_context.load_cert_chain(str(ssl_cert), str(ssl_key))
+            app = self.init_web_app(token=self.__token)
 
-        web.run_app(app, host=self.__host, port=self.__port, loop=loop, ssl_context=ssl_context, print=self.print)
+            here = pathlib.Path(self.__directory)
+            ssl_cert = here / "ssl" / "server.crt"
+            ssl_key = here / "ssl" / "server.key"
+            ssl_context = None
+            if ssl_cert.exists() and ssl_key.exists():
+                ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+                ssl_context.load_cert_chain(str(ssl_cert), str(ssl_key))
 
+            web.run_app(app, host=self.__host, port=self.__port,
+                        loop=loop, ssl_context=ssl_context, print=self.print)
+        else:
+            print("Address('{}', {}) already in use".format(ip_address, self.__port))
+            
     def print(self, str):
         print(str)
         print("token={}\n".format(self.__token))
-        
+
+    def available_port(self, ip_address, port):
+        is_available = False
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex((ip_address, port))
+        if result != 0:
+            is_available = True
+        sock.close()
+        return is_available
+
     def init_web_app(self, *, token: str) -> web.Application:
-        
+
         if token is None:
             app = web.Application()
         else:
@@ -158,10 +172,8 @@ class ServerVerb(VerbExtension):
         self.__logger.info('on_shutdown')
         await self.handler_node.shutdown()
         self.__ros_executor.shutdown()
-        # await asyncio.sleep(0.2)
 
     async def on_cleanup(self, app: web.Application) -> None:
         self.__logger.info('on_cleanup')
         await asyncio.sleep(0.2)
-
         # await self.handler_node.cleanup()
