@@ -5,96 +5,47 @@ import os.path
 import asyncio
 import secrets
 from aiohttp import web
+import ssl
+import pathlib
 
-import launch.logging
+import rclpy
+import rclpy.logging
 from ros2web.verb import VerbExtension
 
 from ..api.handler import HandlerNode
+from ..api.ros_executor import ROSExecutor
 from ..utilities import get_ip_address
 
-logger = launch.logging.get_logger('server')
-
-
-async def root_handler(request: web.Request) -> NoReturn:
-    raise web.HTTPNotFound()
-
-
-async def on_startup(app: web.Application) -> None:
-    logger.debug('on_startup')
-    handler_node: HandlerNode = app['handler_node']
-    await handler_node.startup()
-    
-
-async def on_shutdown(app: web.Application) -> None:
-    logger.debug('on_shutdown')
-    handler_node: HandlerNode = app['handler_node']
-    await handler_node.shutdown()
-    
-
-
-async def on_cleanup(app: web.Application) -> None:
-    logger.debug('on_cleanup')
-    handler_node: HandlerNode = app['handler_node']
-    await handler_node.cleanup()
-    
 
 @web.middleware
 async def token_auth(request: web.Request, handler):
+    _token = request.app["token"]
+
+    search_params = request.rel_url.query
+    token_param = search_params.get("token")
+    
+    if token_param:
+        if _token != token_param:
+            raise web.HTTPUnauthorized()
+        else:
+            exc = web.HTTPFound(location=request.path)
+            exc.set_cookie("AUTH", _token)
+            raise exc
+
+    token_header = request.headers.get("token")
+    if token_header:
+        token = token_header
+    else:
+        token = request.cookies.get("AUTH")
+        
+    if _token != token:
+        raise web.HTTPUnauthorized()
+
     response = await handler(request)
     return response
 
 
-def init_web_app(*, handler_node: HandlerNode) -> web.Application:
-    # app = web.Application(middlewares=[token_auth])
-    app = web.Application()
-    app['handler_node'] = handler_node
-
-    # router
-    app.router.add_get("/{path:.*}", handler_node.web_handler)
-    app.router.add_post("/{path:.*}", handler_node.web_handler)
-    app.router.add_put("/{path:.*}", handler_node.web_handler)
-    app.router.add_delete("/{path:.*}", handler_node.web_handler)
-    
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
-    app.on_cleanup.append(on_cleanup)
-
-    return app
-
-def exception_handler(loop, context):
-    print(context)
-    
 class ServerVerb(VerbExtension):
-        
-    """Start the server."""
-    async def __start_server(self, *, loop: asyncio.AbstractEventLoop):
-        try:
-            token = secrets.token_hex(16)
-            ip_address = self.__host
-            if self.__host is None:
-                ip_address = get_ip_address()
-            
-            node_name = 'ros2web'
-            handler_node = HandlerNode(node_name=node_name, directory=self.__directory,
-                                     ip_address=ip_address, port=self.__port, token=token,
-                                     loop=loop)
-            
-            runner = web.AppRunner(init_web_app(handler_node=handler_node))
-            await runner.setup()
-
-            site = web.TCPSite(runner, self.__host, self.__port)
-            await site.start()
-            
-            print("(Press CTRL+C to quit)\n")
-            
-            completed_future = loop.create_future()
-            await completed_future
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await runner.cleanup()
-            pass
-            
 
     def add_arguments(self, parser, cli_name):
         parser.add_argument(
@@ -104,28 +55,113 @@ class ServerVerb(VerbExtension):
             '--port',
             default='8080',
             help='Specify alternate port [default: 8080]')
-
+        
         parser.add_argument(
             '--destination-directory',
-            default=os.path.expanduser('~'),
+            default=os.path.join(os.path.expanduser('~'), '.ros2web'),
             help='Directory where to create the config directory')
+
+        parser.add_argument(
+            '--node-name',
+            default='ros2web',
+            help='Node name [default: ros2web]')
+
+        parser.add_argument(
+            '--namespace',
+            default=None,
+            help='namespace [default: None]')
+
+        parser.add_argument(
+            '--log-level',
+            default='ERROR',
+            choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+            help='Log Level [default: ERROR]')
+        
+        parser.add_argument(
+            '--non-auth',
+            action='store_true',
+            help='Token is not used.')
 
     def main(self, *, args):
         self.__port = int(args.port)
         self.__directory = args.destination_directory
         self.__host = args.bind
+        self.__log_level = args.log_level
+        self.__node_name = args.node_name
+        self.__namespace = args.namespace
+        self.__non_auth = args.non_auth
         
+        self.__logger = rclpy.logging.get_logger('ServerVerb')
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.set_exception_handler(exception_handler)
+
+        self.__ros_executor = ROSExecutor(node_name=self.__node_name,
+                                          namespace=self.__namespace,
+                                          args=['--ros-args', '--log-level',
+                                                self.__log_level],
+                                          loop=loop)
+
+        self.__token = None if self.__non_auth is True else secrets.token_hex(16)
+        ip_address = self.__host
+        if self.__host is None:
+            ip_address = get_ip_address()
         
-        try:
-            task = loop.create_task(self.__start_server(loop=loop))
-            loop.run_forever()
-        except KeyboardInterrupt:
-            task.cancel()
-            loop.run_until_complete(task)
-        finally:
-            loop.close()
+        self.handler_node = HandlerNode(directory=self.__directory,
+                                        ip_address=ip_address, port=self.__port, token=self.__token,
+                                        loop=loop)
+
+        app = self.init_web_app(token=self.__token)
+
+        here = pathlib.Path(self.__directory)
+        ssl_cert = here / "ssl" / "server.crt"
+        ssl_key = here / "ssl" / "server.key"
+        ssl_context = None
+        if ssl_cert.exists() and ssl_key.exists():
+            ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ssl_context.load_cert_chain(str(ssl_cert), str(ssl_key))
+
+        web.run_app(app, host=self.__host, port=self.__port, loop=loop, ssl_context=ssl_context, print=self.print)
+
+    def print(self, str):
+        print(str)
+        print("token={}\n".format(self.__token))
         
+    def init_web_app(self, *, token: str) -> web.Application:
         
+        if token is None:
+            app = web.Application()
+        else:
+            app = web.Application(middlewares=[token_auth])
+            app['token'] = token
+
+        app.router.add_get("/{path:.*}", self.handler_node.web_handler)
+        app.router.add_post("/{path:.*}", self.handler_node.web_handler)
+        app.router.add_put("/{path:.*}", self.handler_node.web_handler)
+        app.router.add_delete("/{path:.*}", self.handler_node.web_handler)
+
+        app.on_startup.append(self.on_startup)
+        app.on_shutdown.append(self.on_shutdown)
+        app.on_cleanup.append(self.on_cleanup)
+
+        return app
+
+    async def root_handler(self, request: web.Request) -> NoReturn:
+        raise web.HTTPNotFound()
+
+    async def on_startup(self, app: web.Application) -> None:
+        self.__logger.info('on_startup')
+        self.__ros_executor.start()
+        await self.handler_node.startup(ros_node=self.__ros_executor.node)
+
+    async def on_shutdown(self, app: web.Application) -> None:
+        self.__logger.info('on_shutdown')
+        await self.handler_node.shutdown()
+        self.__ros_executor.shutdown()
+        # await asyncio.sleep(0.2)
+
+    async def on_cleanup(self, app: web.Application) -> None:
+        self.__logger.info('on_cleanup')
+        await asyncio.sleep(0.2)
+
+        # await self.handler_node.cleanup()

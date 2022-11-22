@@ -1,0 +1,108 @@
+from typing import Dict, Set
+from typing import Optional, Callable
+
+import asyncio
+from aiohttp import web
+from aiohttp import WSCloseCode
+import weakref
+
+import rclpy.node
+import rclpy.logging
+
+from ros2web_interfaces.msg import WSMsg, WSMsgData, WSMsgType
+from ros2web_interfaces.srv import HTTP
+
+
+class WSClient:
+
+    def __init__(self, *, srv_name: str, route:str, 
+                 ros_node: rclpy.node.Node, loop: asyncio.AbstractEventLoop) -> None:
+
+        self.__loop = loop
+        
+        self.__ros_node = ros_node
+        self.__srv_name = srv_name
+        self.__route = route
+        
+        pub_topic = f'ws/pub{route}'
+        sub_topic = f'ws/sub{route}'
+        
+        self.__srv_client = self.__ros_node .create_client(HTTP, srv_name)
+        self.__subscription = self.__ros_node.create_subscription(WSMsg, pub_topic, self.__on_subscribe, 10)
+        self.__publisher = self.__ros_node.create_publisher(WSMsg, sub_topic, 10)
+        
+        self.__ws_lock = asyncio.Lock()
+        self.__websocket_dict: Dict[str, web.WebSocketResponse] \
+            = weakref.WeakValueDictionary()
+            
+        self.__logger = rclpy.logging.get_logger('WSClient')
+        
+    def wait_for_service(self, timeout_sec: float = None)->bool:
+        return self.__srv_client.wait_for_service(timeout_sec=timeout_sec)
+    
+    async def open(self, http_request: HTTP.Request):
+        http_request.srv_name = self.__srv_name
+        http_request.route = self.__route
+        ready = self.__srv_client.wait_for_service(timeout_sec=1.0)
+        if not ready:
+            raise RuntimeError('Wait for service timed out. ({})'.format(self.__srv_name))
+        
+        http_response: HTTP.Response = await self.__srv_client.call_async(http_request)
+        if http_response is None:
+            raise RuntimeError('response error')
+        
+        return http_response
+    
+    async def register(self, ws_id: str, ws: web.WebSocketResponse):
+        async with self.__ws_lock:
+            self.__websocket_dict[ws_id] = ws
+    
+    async def unregister(self, ws_id: str):
+        async with self.__ws_lock:
+            del self.__websocket_dict[ws_id]
+        
+        msg = WSMsg()
+        msg.type = WSMsgType.CLOSE
+        msg.ws_id = ws_id
+        self.__publisher.publish(msg)
+    
+    def publish(self, msg: WSMsg):
+        self.__publisher.publish(msg)
+
+    def __on_subscribe(self, msg: WSMsg):
+        # TODO: PingPongの中継機能
+        
+        if msg.ws_id == '' and msg.route == '':
+            self.__logger.warning(
+                "WSMsg requires a property value of ws_id or route.".format(msg))
+            return
+        
+        ws_id = None if msg.ws_id == '' else msg.ws_id
+        if msg.type == WSMsgType.TEXT:
+            data = msg.data.str
+            asyncio.run_coroutine_threadsafe(
+                self.__send_str(data, ws_id=ws_id), self.__loop)
+        elif msg.type == WSMsgType.BINARY:
+            pass
+        elif msg.type == WSMsgType.CLOSE:
+            pass
+        
+    
+    async def __send_str(self, data: str, *, ws_id: Optional[str]):
+        async with self.__ws_lock:
+            if ws_id is None:
+                await asyncio.wait([ws.send_str(data)
+                                for ws in self.__websocket_dict.values() if ws.closed is False])
+            else:
+                ws = self.__websocket_dict.get(ws_id)
+                await ws.send_str(data)
+    
+    async def destroy(self):
+        async with self.__ws_lock:
+            await asyncio.wait([client.close(code=WSCloseCode.GOING_AWAY, message='ws client destroy')
+                                for client in self.__websocket_dict.values() if client.closed is False])
+        
+        self.__ros_node.destroy_client(self.__srv_client)
+        self.__ros_node.destroy_publisher(self.__publisher)
+        self.__ros_node.destroy_subscription(self.__subscription)
+        

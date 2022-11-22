@@ -12,8 +12,6 @@ from rclpy.executors import SingleThreadedExecutor
 # from rclpy.executors import MultiThreadedExecutor
 from rclpy.executors import ExternalShutdownException
 
-import launch.logging
-
 
 class ROSExecutor:
     def __init__(self, *,
@@ -21,25 +19,29 @@ class ROSExecutor:
                  namespace: Optional[str] = None,
                  args: Optional[List[str]] = None,
                  loop: AbstractEventLoop) -> None:
-
-        self.__logger = launch.logging.get_logger('ROSExecutor')
+        
         self.__loop = loop
         self.__node_name = node_name
         self.__namespace = namespace
-
+        self.__running = False
+        
         self.__ros_context = rclpy.Context()
         rclpy.init(args=args, context=self.__ros_context)
+        
+        
+    def start(self):
+        self.__running = True
         self.__ros_executor = SingleThreadedExecutor(
             context=self.__ros_context)
         self.__node = rclpy.create_node(self.__node_name,
                                         namespace=self.__namespace,
                                         context=self.__ros_context)
         self.__ros_executor.add_node(self.__node)
-        
-        self.__running = True
         executor = concurrent.futures.ThreadPoolExecutor()
         self.__loop.run_in_executor(executor, self.__ros_loop)
-
+        
+        
+    
     def shutdown(self):
         self.__running = False
         self.__node.destroy_node()
