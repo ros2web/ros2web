@@ -12,10 +12,9 @@ import rclpy
 import rclpy.logging
 
 from ros2web.verb import VerbExtension
-
-from ..api.handler import HandlerNode
-from ..api.ros_executor import ROSExecutor
-from ..utilities import get_ip_address
+from ros2web.api.handler import HandlerNode
+from ros2web.api.ros_executor import ROSExecutor
+from ros2web.utilities import get_ip_address
 
 
 @web.middleware
@@ -108,7 +107,7 @@ class ServerVerb(VerbExtension):
                                             args=['--ros-args', '--log-level',
                                                     self.__log_level],
                                             loop=loop)
-            
+
             self.handler_node = HandlerNode(directory=self.__directory,
                                             ip_address=ip_address, port=self.__port, token=self.__token,
                                             loop=loop)
@@ -177,3 +176,13 @@ class ServerVerb(VerbExtension):
         self.__logger.info('on_cleanup')
         await asyncio.sleep(0.2)
         # await self.handler_node.cleanup()
+
+
+if __name__ == '__main__':
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    cli = ServerVerb()
+    cli.add_arguments(parser, None)
+    args = parser.parse_args()
+    cli.main(args=args)
