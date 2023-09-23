@@ -17,7 +17,7 @@ ROS2 by allowing HTTP requests to be processed by ROS2 packages.
 +-------------+            +-----------+               +--------------+
 ```
 
-There is also [ros2web_app](ros2web_ap) for the creation of web applications with ros2web.
+There is also [ros2web_app](https://github.com/ros2web/ros2web_app) for the creation of web applications with ros2web.
 
 ### Packages
 
@@ -29,9 +29,9 @@ There is also [ros2web_app](ros2web_ap) for the creation of web applications wit
 
 Related packages for creating web applications to manipulate ROS2 packages using ros2web.
 
-- [ros2web_app](ros2web_app): A web application framework designed for the easy creation of
+- [ros2web_app](https://github.com/ros2web/ros2web_app): A web application framework designed for the easy creation of
   web applications that manipulate ROS2 packages.
-- [launch_api](launch_api): Library for managing ROS2 package launches in python.
+- [launch_api](https://github.com/ros2web/launch_api): Library for managing ROS2 package launches in python.
 
 
 ## Installation
