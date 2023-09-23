@@ -52,7 +52,7 @@ colcon build
 
 ## Usage
 
-### 1. Creating a ROS2 Service.
+### 1. Creating a ROS2 Service
 
 Create a service inside the ROS2 package that can accept HTTP requests through ros2web. 
 For ros2web to process these HTTP requests correctly, the service name should adhere to
@@ -97,30 +97,32 @@ def main(args=None):
         pass
 ```
 
-### 2. Start ros2web server and ros2 package.
-Start ros2web server with `ros2 web server` command.
-ros2web is implemented as an extension of ros2cli. It can be used in the same way as the `ros2` command
+### 2. Starting the ros2web server and ROS2 package
 
-Then run the ROS2 package you created.
-The name of the created ROS package is `ros2web_example_py` and the executable is `api`.
+Initiate the ros2web server using the `ros2 web server` command.
+ros2web functions as an extension of `ros2cli`, and its usage aligns with the `ros2` command.
+Subsequently, launch the ROS2 package you've developed.
+
+In the following example, the name of the developed package is `ros2web_example_py` and the executable name is `api`.
 
 ```bash
 ros2 web server --no-auth
 ros2 run ros2web_example_py api
 ```
 
-### 3. Access the address of the ros2web server.
+### 3. Accessing the ros2web server address
 
-Accesses the path specified in the service name of the ROS2 package.
+Navigate to the path defined in the service name of the ROS2 package:
 
 http://localhost:8080/add_two_ints?a=1&b=2
 
-Accessing the above will return the following values.
+Accessing this URL will yield the result:
+
 ```json
 {"sum": 3}
 ```
 
-A complete example is available at [ros2web_example_py](https://github.com/ros2web/ros2web/tree/ros2/examples/ros2web_example_py).
+A complete code is available at [ros2web_example_py](https://github.com/ros2web/ros2web/tree/ros2/examples/ros2web_example_py).
 
 ## License
 
