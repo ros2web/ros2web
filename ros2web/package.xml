@@ -2,8 +2,8 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>ros2web</name>
-  <version>0.0.1</version>
-  <description>TODO: Package description</description>
+  <version>0.1.0</version>
+  <description>The ros2web is software that forwards HTTP requests to ROS2 packages.</description>
   <maintainer email="tygoto@me.com">tygoto</maintainer>
   <license>Apache License 2.0</license>
 

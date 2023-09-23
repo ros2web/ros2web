@@ -1,39 +1,36 @@
-import threading
-from typing import Dict, List, Set, Any, Tuple
-from typing import Optional, Callable, NoReturn
-
 import asyncio
-import aiohttp
-from aiohttp import web
-from aiohttp import WSCloseCode
 import itertools
-import weakref
+import threading
+from typing import Dict, List, Tuple
+from typing import Optional, NoReturn
 
-import rclpy.node
+import uuid
+import aiohttp
 import rclpy.logging
+import rclpy.node
+from aiohttp import web
 from ros2service.api import get_service_names_and_types
-
-from ros2web_interfaces.srv import HTTP, ServerInfo
 from ros2web_interfaces.msg import HTTPStatusCode, ContentType, BodyPart
-from ros2web_interfaces.msg import WSMsg, WSMsgData, WSMsgType
+from ros2web_interfaces.msg import WSMsg, WSMsgType
+from ros2web_interfaces.srv import HTTP
 
 from .ws_client import WSClient
 
 TIMER_PERIOD = 30  # sec.
 
 
-class HandlerNode:
+class Handler:
     def __init__(self, *, directory: str,
                  ip_address: str, port: int, token: str,
                  loop: asyncio.AbstractEventLoop) -> None:
 
+        self.__timer = None
         self.__directory = directory
         self.__ip_address = ip_address
         self.__port = port
         self.__token = token
         self.__loop = loop
 
-        self.__info_srv = None
         self.__ros_node = None
 
         self.__srv_clients_lock = threading.Lock()
@@ -41,42 +38,29 @@ class HandlerNode:
         self.__srv_clients: Dict[str, rclpy.node.Client] = {}
         self.__ws_clients: Dict[str, WSClient] = {}
 
-        self.__logger = rclpy.logging.get_logger('WebHandler')
+        self.__logger = rclpy.logging.get_logger('Handler')
 
     async def startup(self, ros_node: rclpy.node.Node):
         self.__ros_node = ros_node
-        INFO_SRV = 'server_info'
-        self.__info_srv = self.__ros_node.create_service(ServerInfo,
-                                                         INFO_SRV, self.__info_srv_handler)
-        self.__timer = self.__ros_node.create_timer(
-            TIMER_PERIOD, self.__interval_srv_check)
+        self.__timer = self.__ros_node.create_timer(TIMER_PERIOD, self.__interval_srv_check)
 
     async def shutdown(self):
         self.__ros_node.destroy_timer(self.__timer)
-        self.__ros_node.destroy_service(self.__info_srv)
-
         for ws_client in self.__ws_clients.values():
             await ws_client.destroy()
 
-    def __info_srv_handler(self, request: ServerInfo.Request,
-                           response: ServerInfo.Response) -> NoReturn:
-        response.directory = self.__directory
-        response.ip_address = self.__ip_address
-        response.port = self.__port
-        response.token = '' if self.__token is None else self.__token
-        
-        return response
-
-    def __get_srv_name(self, method: str, path: str) -> Tuple[Optional[str],
-                                                              Optional[str]]:
+    # Get service name and route from path
+    def __get_srv_name(self, method: str, path: str) -> Tuple[Optional[str], Optional[str]]:
         method = method.lower()
-        method_path = method if method == '/ws' else f'/http/{method}'
+        method_path = '/ws' if method == 'ws' else f'/http/{method}'
+
+        if method == 'ws':
+            path = path.replace('/ws', '')
 
         http_route = None
         srv_name = None
-        
-        service_names_and_types = get_service_names_and_types(
-            node=self.__ros_node)
+
+        service_names_and_types = get_service_names_and_types(node=self.__ros_node)
         http_srv_names = [service_name.replace(method_path, '')
                           for (service_name, service_type) in service_names_and_types
                           if 'ros2web_interfaces/srv/HTTP' in service_type
@@ -107,9 +91,9 @@ class HandlerNode:
 
         for key in ws_srv_client_keys:
             client = self.__ws_clients[key]
-            
+
             asyncio.run_coroutine_threadsafe(client.destroy(), self.__loop)
-            
+
             with self.__ws_clients_lock:
                 del self.__ws_clients[key]
 
@@ -119,7 +103,6 @@ class HandlerNode:
                 srv_client_keys.add(key)
 
         for key in srv_client_keys:
-            client = self.__srv_clients[key]
             with self.__srv_clients_lock:
                 del self.__srv_clients[key]
 
@@ -145,7 +128,7 @@ class HandlerNode:
         ws_client = self.__ws_clients.get(srv_name)
         if ws_client is None:
             ws_client = WSClient(srv_name=srv_name, route=route,
-                                        ros_node=self.__ros_node, loop=self.__loop)
+                                 ros_node=self.__ros_node, loop=self.__loop)
 
             with self.__ws_clients_lock:
                 self.__ws_clients[srv_name] = ws_client
@@ -161,45 +144,45 @@ class HandlerNode:
 
         return ws_client
 
-    async def __multipart_form_data(self, request: web.Request)->List[BodyPart]:
-        
+    async def __multipart_form_data(self, request: web.Request) -> List[BodyPart]:
+
         reader = await request.multipart()
         body_parts = []
         while True:
             part = await reader.next()
             if part is None:
                 break
-            
+
             body_part = BodyPart()
             body_part.name = part.name
-            
+
             headers = list(itertools.chain.from_iterable(list(part.headers.items())))
             body_part.headers = headers
-            
+
             content_type = part.headers.get(aiohttp.hdrs.CONTENT_TYPE)
             if content_type is None and part.filename is None:
                 content_type = ContentType.TEXT_PLAIN
             if content_type is None:
                 content_type = ''
-            
+
             body_part.content_type = content_type
             body_part.filename = part.filename if part.filename is not None else ''
-            
+
             data = await part.read()
             body_part.data = list(data)
             body_parts.append(body_part)
-            
+
         return body_parts
-    
-    async def __x_www_form_urlencoded(self, request: web.Request)->List[BodyPart]:
+
+    async def __x_www_form_urlencoded(self, request: web.Request) -> List[BodyPart]:
         data = await request.post()
-        
+
         body_parts = []
         for key, value in data.items():
             body_part = BodyPart()
             body_part.name = key
             body_parts.append(body_part)
-            
+
             if isinstance(value, str):
                 body_part.content_type = ContentType.TEXT_PLAIN
                 content = value.encode('utf-8')
@@ -214,7 +197,7 @@ class HandlerNode:
             #     content = value.file.read()
             #     body_part.data = list(content)
         return body_parts
-    
+
     async def __convert_http_request(self, request: web.Request) -> HTTP.Request:
 
         http_request = HTTP.Request()
@@ -223,7 +206,7 @@ class HandlerNode:
         http_request.path = request.path
         http_request.query = request.query_string
         http_request.content_type = request.content_type
-        
+
         if request.content_type == ContentType.MULTIPART_FORM_DATA:
             http_request.multipart = await self.__multipart_form_data(request)
         elif request.content_type == ContentType.APPLICATION_X_WWW_FORM_URLENCODED:
@@ -233,18 +216,25 @@ class HandlerNode:
                 if request.content_type.startswith("text/"):
                     text = await request.text()
                     http_request.text = text
+                if request.content_type.startswith("application/json"):
+                    text = await request.text()
+                    http_request.text = text
                 else:
                     data = await request.read()
                     http_request.body = list(data)
 
-        headers = list(itertools.chain.from_iterable(
-            list(request.headers.items())))
+        # Conversion from dict to list
+        # ex. {key: value, key2: value2} -> [key, value, key2, value2]
+        headers = list(itertools.chain.from_iterable(list(request.headers.items())))
         http_request.headers = headers
+
+        # Conversion from list to dict
+        # ex. [key, value, key2, value2] -> {key: value, key2: value2}
         # headers = dict(zip(headers[0::2], headers[1::2]))
 
         return http_request
 
-    def __convert_file_response(self, response: HTTP.Response) -> web.Response:
+    def __convert_file_response(self, response: HTTP.Response) -> web.FileResponse:
         status = response.status if response.status > 0 else 200
         reason = response.reason if response.reason != "" else None
 
@@ -264,43 +254,37 @@ class HandlerNode:
                             content_type=content_type, charset=charset)
 
     async def ws_handler(self, request: web.Request) -> web.WebSocketResponse:
-        self.__logger.info('request: {}'.format(request.path))
-
         srv_name, route = self.__get_srv_name('ws', request.path)
         if route is None:
-            self.__logger.error(
-                'There is no route. ({})'.format(request.path))
+            self.__logger.error('WS: There is no route. ({})'.format(request.path))
             raise web.HTTPNotFound()
 
         http_request = await self.__convert_http_request(request)
-        self.__logger.info('request: {}'.format(http_request))
-        
+        # self.__logger.info('request: {}'.format(http_request))
+
         ws_client = self.__get_ws_client(srv_name, route)
         if ws_client is None:
             raise web.HTTPInternalServerError()
 
         http_response: HTTP.Response = await ws_client.open(http_request)
 
-        self.__logger.info('response: {}'.format(http_response))
-
+        # self.__logger.info('response: {}'.format(http_response))
         if http_response is None:
             raise web.HTTPInternalServerError()
+
         if http_response.status == HTTPStatusCode.HTTP_NOT_FOUND:
             raise web.HTTPNotFound()
         elif http_response.status == HTTPStatusCode.HTTP_INTERNAL_SERVER_ERROR:
             raise web.HTTPInternalServerError()
-
-        ws_id = http_response.text
+        elif http_response.status == HTTPStatusCode.HTTP_UNAUTHORIZED:
+            raise web.HTTPUnauthorized()
 
         ws = web.WebSocketResponse()
         await ws.prepare(request)
-        
+        ws_id = str(uuid.uuid4())
         try:
             await ws_client.register(ws_id, ws)
             async for ws_msg in ws:
-                
-                print(ws_msg)
-
                 msg = WSMsg()
                 if ws_msg.type == aiohttp.WSMsgType.TEXT:
                     msg.route = route
@@ -318,12 +302,16 @@ class HandlerNode:
             self.__logger.error(f"ValueError: {e}")
         except TypeError as e:
             self.__logger.error(f"TypeError: {e}")
-        finally:
+
+        try:
             await ws_client.unregister(ws_id)
+        except Exception as e:
+            self.__logger.error(f"Exception: {e}")
 
         return ws
 
     async def web_handler(self, request: web.Request) -> web.StreamResponse:
+        self.__logger.info('REQ: {}'.format(request.path))
 
         ws_key = request.headers.get('Sec-WebSocket-Key')
         if ws_key is not None:
@@ -335,8 +323,6 @@ class HandlerNode:
 
         srv_name, route = self.__get_srv_name(request.method, request.path)
         if route is None:
-            if route in self.__srv_clients.keys():
-                del self.__srv_clients[route]
             self.__logger.warning(
                 'There is no route. ({})'.format(request.path))
             raise web.HTTPNotFound()
@@ -352,9 +338,9 @@ class HandlerNode:
 
         try:
             http_response: HTTP.Response = await asyncio.wait_for(
-                srv_client.call_async(http_request),
-                timeout=5)
+                srv_client.call_async(http_request), timeout=5)
         except asyncio.TimeoutError:
+            self.__logger.warning('TimeoutError: {}'.format(request.path))
             raise web.HTTPRequestTimeout()
 
         self.__logger.info('response: {}'.format(http_response))
