@@ -52,11 +52,14 @@ colcon build
 
 ## Usage
 
-### 1. Create ROS2 Service.
-Create a service in the ROS2 package that accepts `HTTP` of the ROS2 service provided by ros2web.
-The service name should be in the format `/http/<method>/<path>`so that ros2web can accept HTTP requests.
-For example, if you create a service named `/http/get/add_two_ints`, then when you access `/add_two_ints` with the `get`
-method, the service of the package will be called.
+### 1. Creating a ROS2 Service.
+
+Create a service inside the ROS2 package that can accept HTTP requests through ros2web. 
+For ros2web to process these HTTP requests correctly, the service name should adhere to
+the format `/http/<HTTP request method>/<path>`. 
+For example, if you create a service named `/http/get/add_two_ints`, accessing `/add_two_ints` 
+with the GET method will invoke the service within the package.
+
 
 The following is an example of a service that accepts a
 GET request and returns the sum of the two numbers specified in the query.
@@ -117,7 +120,7 @@ Accessing the above will return the following values.
 {"sum": 3}
 ```
 
-A complete example is available at [ros2web_example_py]().
+A complete example is available at [ros2web_example_py](https://github.com/ros2web/ros2web/tree/ros2/examples/ros2web_example_py).
 
 ## License
 
