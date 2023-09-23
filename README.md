@@ -4,9 +4,9 @@
 
 ## Overview
 
-The ros2web is software that forwards HTTP requests to ROS2 packages.
-It facilitates the integration of web applications with 
-ROS2 by allowing HTTP requests to be processed by ROS2 packages.
+`ros2web` is software that forwards HTTP requests to ROS2 packages, 
+facilitating the integration of web applications with ROS2 by 
+enabling HTTP requests to be processed by ROS2 packages.
 
 
 ```text
