@@ -40,7 +40,7 @@ The installation procedure is the same as for the general ROS2 package.
 
 ```bash
 # Install dependencies
-python3 -m pip install -r requirements.txt 
+python3 -m pip install -r requirements.txt
 
 mkdir -p ~/ros2_ws/src
 cd ~/ros2_ws/src
