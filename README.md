@@ -133,4 +133,4 @@ Distributed under the Apache 2.0 License. See `LICENSE` for more information.
 This work was supported by the Cabinet Office (CAO), 
   Cross-ministerial Strategic Innovation Promotion Program (SIP), 
   “An intelligent knowledge processing infrastructure, integrating physical and virtual domains” 
-  (funding agency: NEDO). [~2023/03]
+  (funding agency: NEDO) [~2023/03].
